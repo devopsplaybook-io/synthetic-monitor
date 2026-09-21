@@ -1,0 +1,24 @@
+{
+  "name": "synthetic-monitor",
+  "version": "0.2.0",
+  "description": "Headless synthetic monitoring prober: probes configured endpoints and emits OpenTelemetry metrics and logs",
+  "main": "ecosystem.config.js",
+  "scripts": {
+    "dev": "cd synthetic-monitor-server && npm run dev"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devopsplaybook-io/synthetic-monitor.git"
+  },
+  "keywords": [
+    "synthetic-monitoring",
+    "opentelemetry",
+    "probes"
+  ],
+  "author": "",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/devopsplaybook-io/synthetic-monitor/issues"
+  },
+  "homepage": "https://github.com/devopsplaybook-io/synthetic-monitor#readme"
+}

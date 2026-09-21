@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: synthetic-monitor
+  labels:
+    app: synthetic-monitor
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  selector:
+    matchLabels:
+      app: synthetic-monitor
+  template:
+    metadata:
+      labels:
+        app: synthetic-monitor
+    spec:
+      containers:
+        - image: synthetic-monitor
+          name: synthetic-monitor
+          imagePullPolicy: Always
+          env:
+            - name: PROBE_CONFIG_FILE
+              value: /etc/synthetic-monitor/probes.yaml
+            - name: PROBE_LOCATION
+              value: "home"
+            # Optional secret (see secret.yaml); entries referenced here:
+            # OPENTELEMETRY_COLLECT_AUTHORIZATION_HEADER, NOTIFICATIONS_API,
+            # NOTIFICATIONS_TOKEN and any ${ENV} placeholder used by probes.yaml.
+            - name: OPENTELEMETRY_COLLECT_AUTHORIZATION_HEADER
+              valueFrom:
+                secretKeyRef:
+                  name: synthetic-monitor-secret
+                  key: OPENTELEMETRY_COLLECT_AUTHORIZATION_HEADER
+                  optional: true
+            - name: NOTIFICATIONS_API
+              valueFrom:
+                secretKeyRef:
+                  name: synthetic-monitor-secret
+                  key: NOTIFICATIONS_API
+                  optional: true
+            - name: NOTIFICATIONS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: synthetic-monitor-secret
+                  key: NOTIFICATIONS_TOKEN
+                  optional: true
+            - name: PROBE_API_SECRET_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: synthetic-monitor-secret
+                  key: PROBE_API_SECRET_TOKEN
+                  optional: true
+          resources:
+            limits:
+              memory: 100Mi
+              cpu: 500m
+            requests:
+              memory: 20Mi
+              cpu: 100m
+          volumeMounts:
+            # Mount the ConfigMap as a directory (not subPath) so kubelet
+            # ConfigMap updates propagate and the service hot-reloads them.
+            - mountPath: /etc/synthetic-monitor
+              name: config-volume
+              readOnly: true
+      volumes:
+        - name: config-volume
+          configMap:
+            name: synthetic-monitor-config

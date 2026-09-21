@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: synthetic-monitor-config
+data:
+  # Probe configuration, mounted as a directory (NOT subPath: subPath mounts
+  # do not receive kubelet ConfigMap updates, which would break hot reload).
+  # `${ENV}` placeholders are resolved from the environment at load time
+  # (wired from synthetic-monitor-secret below); secrets never live here.
+  probes.yaml: |
+    probes:
+      - name: otel-light-home
+        type: http
+        target: http://otel-light.otel-light.svc.cluster.local:8080/
+        intervalSeconds: 30
+        timeoutSeconds: 5
+        expect:
+          statusCode: 200
+
+      - name: dead-endpoint
+        type: http
+        target: http://localhost:9999/health
+        intervalSeconds: 30
+        timeoutSeconds: 5
+
+      - name: postgres-tcp
+        type: tcp
+        target: postgres.database.svc.cluster.local:5432
+        intervalSeconds: 60
+        timeoutSeconds: 5
+
+      - name: dns-example
+        type: dns
+        target: example.com
+        intervalSeconds: 300
+        timeoutSeconds: 5
+
+      - name: tls-example
+        type: tls
+        target: example.com:443
+        intervalSeconds: 3600
+        timeoutSeconds: 5

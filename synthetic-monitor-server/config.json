@@ -1,0 +1,4 @@
+{
+  "LOG_LEVEL": "info",
+  "PROBE_CONFIG_FILE": "probes.yaml"
+}

@@ -1,0 +1,60 @@
+# Synthetic monitoring probe configuration.
+#
+# Mounted as a Kubernetes ConfigMap and hot-reloaded by the service
+# (kubelet propagates ConfigMap updates within about a minute).
+# Secrets must never live in this file: use ${ENV_VAR} placeholders that the
+# service resolves from the environment (e.g. a Kubernetes Secret) at load
+# time. An unresolved variable rejects the configuration (last known good
+# config is kept).
+probes:
+  # HTTP probe of the local otel-light UI.
+  - name: otel-light-home
+    type: http
+    target: http://localhost:8080/
+    intervalSeconds: 30
+    timeoutSeconds: 5
+    expect:
+      statusCode: 200
+
+  # HTTP probe of a (dead) internal API: reports probe.success=0 with
+  # error.code=connect_refused.
+  - name: broken-api
+    type: http
+    target: http://localhost:9999/health
+    intervalSeconds: 30
+    timeoutSeconds: 5
+
+  # TCP reachability of a PostgreSQL service.
+  - name: postgres-tcp
+    type: tcp
+    target: postgres.database.svc.cluster.local:5432
+    intervalSeconds: 60
+    timeoutSeconds: 5
+
+  # DNS resolution check.
+  - name: dns-example
+    type: dns
+    target: example.com
+    intervalSeconds: 300
+    timeoutSeconds: 5
+
+  # TLS certificate expiry check (probe.tls.cert_remaining_days).
+  - name: tls-example
+    type: tls
+    target: example.com:443
+    intervalSeconds: 3600
+    timeoutSeconds: 5
+
+  # HTTP probe whose Authorization header comes from an environment variable
+  # (wired from a Kubernetes Secret via secretKeyRef).
+  - name: authenticated-api
+    type: http
+    target: https://api.example.com/health
+    method: GET
+    headers:
+      Authorization: "Bearer ${PROBE_API_SECRET_TOKEN}"
+    intervalSeconds: 60
+    timeoutSeconds: 5
+    expect:
+      statusCode: 200
+      maxDurationMs: 2000
