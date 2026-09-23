@@ -7,6 +7,8 @@ export type ProbeType = "http" | "tcp" | "dns" | "tls";
 export type ProbeErrorCode =
   | "dns_error"
   | "connect_refused"
+  | "network_unreachable"
+  | "connection_reset"
   | "tls_error"
   | "timeout"
   | "status_mismatch"

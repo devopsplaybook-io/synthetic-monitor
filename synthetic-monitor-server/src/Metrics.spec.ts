@@ -12,11 +12,18 @@ interface CapturedGauge {
   collect: () => ObservedPoint[];
 }
 
+interface CounterCall {
+  value: number;
+  attributes: Record<string, string>;
+}
+
 function fakeMeter(): {
   gauges: Map<string, CapturedGauge>;
+  counters: Map<string, CounterCall[]>;
   meter: unknown;
 } {
   const gauges = new Map<string, CapturedGauge>();
+  const counters = new Map<string, CounterCall[]>();
   const meter = {
     createObservableGauge: (
       key: string,
@@ -37,8 +44,16 @@ function fakeMeter(): {
       });
       return {};
     },
+    createCounter: (key: string) => {
+      counters.set(key, []);
+      return {
+        add: (value: number, attributes: Record<string, string>) => {
+          counters.get(key).push({ value, attributes });
+        },
+      };
+    },
   };
-  return { gauges, meter };
+  return { gauges, counters, meter };
 }
 
 function makeResult(overrides: Partial<ProbeResult>): ProbeResult {
@@ -55,25 +70,30 @@ function makeResult(overrides: Partial<ProbeResult>): ProbeResult {
 
 describe("Metrics", () => {
   let gauges: Map<string, CapturedGauge>;
+  let counters: Map<string, CounterCall[]>;
 
   beforeEach(() => {
+    pruneProbeResults(new Set());
     const fake = fakeMeter();
     gauges = fake.gauges;
+    counters = fake.counters;
     OTelSetMeter(fake.meter as never);
     MetricsInit({ PROBE_LOCATION: "home" });
   });
 
-  it("registers the documented probe gauges once", () => {
+  it("registers the documented probe gauges and the outcome counter once", () => {
     expect(Array.from(gauges.keys())).toEqual([
       "probe.success",
       "probe.duration",
       "probe.http.status_code",
       "probe.dns.lookup_time",
       "probe.tls.cert_remaining_days",
+      "probe.last_result_age_seconds",
     ]);
+    expect(Array.from(counters.keys())).toEqual(["probe.runs.total"]);
   });
 
-  it("reports the last result of each probe with its attributes", () => {
+  it("reports the last result of each probe with a stable attribute set", () => {
     recordProbeResult(makeResult({ probeName: "web", success: true }));
     recordProbeResult(
       makeResult({
@@ -97,31 +117,125 @@ describe("Metrics", () => {
     });
     expect(
       success.find((p) => p.attributes["probe.name"] === "db"),
-    ).toMatchObject({ value: 0 });
-    expect(
-      success.find((p) => p.attributes["probe.name"] === "db").attributes[
-        "error.code"
-      ],
-    ).toBe("connect_refused");
-
-    const status = gauges.get("probe.http.status_code").collect();
-    expect(status).toHaveLength(1);
-    expect(status[0]).toMatchObject({ value: 200, attributes: { "probe.name": "web" } });
+    ).toMatchObject({
+      value: 0,
+      attributes: {
+        "probe.name": "db",
+        "probe.type": "tcp",
+        "probe.location": "home",
+      },
+    });
+    // The failure reason must never be an attribute of a gauge: an attribute
+    // set that varies with the value leaves phantom series behind.
+    for (const point of success) {
+      expect(point.attributes["error.code"]).toBeUndefined();
+    }
   });
 
-  it("omits error.code on success and probe.location when unset", () => {
-    recordProbeResult(makeResult({ probeName: "web" }));
-    const points = gauges.get("probe.success").collect();
-    expect(points[0].attributes["error.code"]).toBeUndefined();
-    expect(points[0].attributes["probe.location"]).toBe("home");
+  it("counts probe runs by outcome and failure reason", () => {
+    recordProbeResult(makeResult({ probeName: "web", success: true }));
+    recordProbeResult(
+      makeResult({
+        probeName: "web",
+        success: false,
+        statusCode: undefined,
+        errorCode: "connect_refused",
+      }),
+    );
 
+    expect(counters.get("probe.runs.total")).toEqual([
+      {
+        value: 1,
+        attributes: {
+          "probe.name": "web",
+          "probe.type": "http",
+          "probe.location": "home",
+          result: "success",
+        },
+      },
+      {
+        value: 1,
+        attributes: {
+          "probe.name": "web",
+          "probe.type": "http",
+          "probe.location": "home",
+          result: "failure",
+          "error.code": "connect_refused",
+        },
+      },
+    ]);
+  });
+
+  it("reports error.code=unknown on the counter when the result carries none", () => {
+    recordProbeResult(
+      makeResult({ probeName: "web", success: false, errorCode: undefined }),
+    );
+    expect(counters.get("probe.runs.total")[0].attributes["error.code"]).toBe(
+      "unknown",
+    );
+  });
+
+  it("omits probe.location when unset", () => {
     const fake = fakeMeter();
     OTelSetMeter(fake.meter as never);
     MetricsInit({ PROBE_LOCATION: "" });
-    const pointsNoLocation = fake.gauges.get("probe.success").collect();
+    recordProbeResult(makeResult({ probeName: "web" }));
+    const points = fake.gauges.get("probe.success").collect();
+    expect(points[0].attributes["probe.location"]).toBeUndefined();
+  });
+
+  it("reports status code 0 for http probes that received no response", () => {
+    recordProbeResult(
+      makeResult({
+        probeName: "web",
+        success: false,
+        statusCode: undefined,
+        errorCode: "timeout",
+      }),
+    );
+    recordProbeResult(
+      makeResult({
+        probeName: "db",
+        probeType: "tcp",
+        statusCode: undefined,
+      }),
+    );
+
+    const status = gauges.get("probe.http.status_code").collect();
+    expect(status).toHaveLength(1);
+    expect(status[0]).toMatchObject({
+      value: 0,
+      attributes: { "probe.name": "web", "probe.type": "http" },
+    });
+  });
+
+  it("reports the age of the last result as a heartbeat", () => {
+    const lastResultTime = 1000000;
+    recordProbeResult(makeResult({ probeName: "web", time: lastResultTime }));
+
+    const fake = fakeMeter();
+    OTelSetMeter(fake.meter as never);
+    MetricsInit({ PROBE_LOCATION: "home" }, () => lastResultTime + 4200);
+
+    const points = fake.gauges.get("probe.last_result_age_seconds").collect();
+    expect(points).toHaveLength(1);
+    expect(points[0]).toMatchObject({
+      value: 4,
+      attributes: { "probe.name": "web", "probe.location": "home" },
+    });
+  });
+
+  it("never reports a negative heartbeat age", () => {
+    const lastResultTime = 1000000;
+    recordProbeResult(makeResult({ probeName: "web", time: lastResultTime }));
+
+    const fake = fakeMeter();
+    OTelSetMeter(fake.meter as never);
+    MetricsInit({ PROBE_LOCATION: "home" }, () => lastResultTime - 5000);
+
     expect(
-      pointsNoLocation[0].attributes["probe.location"],
-    ).toBeUndefined();
+      fake.gauges.get("probe.last_result_age_seconds").collect()[0].value,
+    ).toBe(0);
   });
 
   it("reports dns lookup time only for dns probes", () => {

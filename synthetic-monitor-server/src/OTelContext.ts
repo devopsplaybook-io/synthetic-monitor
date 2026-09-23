@@ -17,6 +17,10 @@ export function OTelSetMeter(meterIn: StandardMeter) {
   meter = meterIn;
 }
 
+export function OTelSetLogger(loggerIn: StandardLogger) {
+  logger = loggerIn;
+}
+
 export function OTelTracer(): StandardTracer {
   return tracer;
 }

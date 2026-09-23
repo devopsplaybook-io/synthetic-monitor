@@ -10,6 +10,7 @@ describe("Config", () => {
     delete process.env.PROBE_CONFIG_FILE;
     delete process.env.PROBE_LOCATION;
     delete process.env.PROBE_MAX_CONCURRENCY;
+    delete process.env.PROBE_LOG_SUCCESS;
     delete process.env.SELF_PROBE_ENABLED;
     delete process.env.NOTIFICATION_CONSECUTIVE_FAILURES;
     delete process.env.NOTIFICATION_REPEAT_AFTER_HOURS;
@@ -28,6 +29,7 @@ describe("Config", () => {
     expect(config.PROBE_CONFIG_FILE).toBe("probes.yaml");
     expect(config.PROBE_LOCATION).toBe("");
     expect(config.PROBE_MAX_CONCURRENCY).toBe(5);
+    expect(config.PROBE_LOG_SUCCESS).toBe(true);
     expect(config.SELF_PROBE_ENABLED).toBe(true);
     expect(config.NOTIFICATION_CONSECUTIVE_FAILURES).toBe(3);
     expect(config.NOTIFICATION_REPEAT_AFTER_HOURS).toBe(4);
@@ -37,6 +39,7 @@ describe("Config", () => {
 
   it("gives environment variables precedence over defaults", async () => {
     process.env.PROBE_MAX_CONCURRENCY = "12";
+    process.env.PROBE_LOG_SUCCESS = "false";
     process.env.SELF_PROBE_ENABLED = "false";
     process.env.PROBE_LOCATION = "home-cluster";
     process.env.NOTIFICATION_CONSECUTIVE_FAILURES = "5";
@@ -44,6 +47,7 @@ describe("Config", () => {
     const config = new Config(missingConfigFile);
     await config.reload();
     expect(config.PROBE_MAX_CONCURRENCY).toBe(12);
+    expect(config.PROBE_LOG_SUCCESS).toBe(false);
     expect(config.SELF_PROBE_ENABLED).toBe(false);
     expect(config.PROBE_LOCATION).toBe("home-cluster");
     expect(config.NOTIFICATION_CONSECUTIVE_FAILURES).toBe(5);

@@ -1,6 +1,6 @@
 {
   "name": "synthetic-monitor",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Headless synthetic monitoring prober: probes configured endpoints and emits OpenTelemetry metrics and logs",
   "main": "ecosystem.config.js",
   "scripts": {

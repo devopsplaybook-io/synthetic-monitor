@@ -6,6 +6,7 @@ export class Config extends ConfigBase {
   public PROBE_CONFIG_FILE = "probes.yaml";
   public PROBE_LOCATION = "";
   public PROBE_MAX_CONCURRENCY = 5;
+  public PROBE_LOG_SUCCESS = true;
   public SELF_PROBE_ENABLED = true;
   public NOTIFICATION_CONSECUTIVE_FAILURES = 3;
   public NOTIFICATION_REPEAT_AFTER_HOURS = 4;
@@ -31,6 +32,7 @@ export class Config extends ConfigBase {
     this.addConfigField({ field: "PROBE_CONFIG_FILE" });
     this.addConfigField({ field: "PROBE_LOCATION" });
     this.addConfigField({ field: "PROBE_MAX_CONCURRENCY" });
+    this.addConfigField({ field: "PROBE_LOG_SUCCESS" });
     this.addConfigField({ field: "SELF_PROBE_ENABLED" });
     this.addConfigField({ field: "NOTIFICATION_CONSECUTIVE_FAILURES" });
     this.addConfigField({ field: "NOTIFICATION_REPEAT_AFTER_HOURS" });
