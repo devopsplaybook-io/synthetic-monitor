@@ -30,7 +30,39 @@ function classifyLookupCode(code: string): ProbeErrorCode {
   if (code === "ECONNREFUSED") {
     return "connect_refused";
   }
+  if (code === "ENETUNREACH" || code === "EHOSTUNREACH") {
+    return "network_unreachable";
+  }
+  if (code === "ECONNRESET") {
+    return "connection_reset";
+  }
   return "unknown";
+}
+
+/**
+ * Errno fields Node attaches to network errors: directly on socket errors and
+ * on the `cause` of the TypeError undici/fetch rejects with. They separate
+ * "no route to the address" from "the address answers but refuses the port".
+ */
+interface ErrnoFields {
+  code?: string;
+  syscall?: string;
+  address?: string;
+  port?: number;
+}
+
+function errnoDetail(detail: string, errno: ErrnoFields): string {
+  const parts = [errno.code ?? ""];
+  if (errno.syscall) {
+    parts.push(errno.syscall);
+  }
+  if (errno.address) {
+    parts.push(
+      `${errno.address}${errno.port !== undefined ? `:${errno.port}` : ""}`,
+    );
+  }
+  const prefix = parts.filter(Boolean).join(" ");
+  return prefix ? `${prefix}: ${detail}` : detail;
 }
 
 function isTlsCode(code: string): boolean {
@@ -48,20 +80,26 @@ function classifyFetchError(err: unknown): {
 } {
   const detail = err instanceof Error ? err.message : String(err);
   // Node's fetch (undici) reports network failures as a TypeError whose
-  // actual cause carries the errno code; also check err.code directly.
-  const causeCode =
-    (err as { cause?: { code?: string } })?.cause?.code ??
-    (err as { code?: string })?.code ??
-    "";
+  // actual cause carries the errno fields; also check them directly.
+  const errWithCause = err as ErrnoFields & { cause?: ErrnoFields };
+  const cause: ErrnoFields = errWithCause.cause ?? {};
+  const errno: ErrnoFields = {
+    code: cause.code ?? errWithCause.code,
+    syscall: cause.syscall ?? errWithCause.syscall,
+    address: cause.address ?? errWithCause.address,
+    port: cause.port ?? errWithCause.port,
+  };
   const name = err instanceof Error ? err.name : "";
   if (name === "AbortError" || name === "TimeoutError") {
     return { errorCode: "timeout", errorDetail: detail };
   }
-  if (causeCode) {
-    if (isTlsCode(causeCode)) {
-      return { errorCode: "tls_error", errorDetail: `${causeCode}: ${detail}` };
-    }
-    return { errorCode: classifyLookupCode(causeCode), errorDetail: `${causeCode}: ${detail}` };
+  if (errno.code) {
+    return {
+      errorCode: isTlsCode(errno.code)
+        ? "tls_error"
+        : classifyLookupCode(errno.code),
+      errorDetail: errnoDetail(detail, errno),
+    };
   }
   return { errorCode: "unknown", errorDetail: detail };
 }
@@ -71,14 +109,59 @@ function classifySocketError(err: unknown): {
   errorDetail: string;
 } {
   const detail = err instanceof Error ? err.message : String(err);
-  const code = (err as { code?: string })?.code ?? "";
-  if (code) {
-    return { errorCode: classifyLookupCode(code), errorDetail: `${code}: ${detail}` };
+  const errno = err as ErrnoFields;
+  if (errno.code) {
+    return {
+      errorCode: classifyLookupCode(errno.code),
+      errorDetail: errnoDetail(detail, errno),
+    };
   }
   return { errorCode: "unknown", errorDetail: detail };
 }
 
 const realHttpDeps: HttpEngineDeps = { fetch: globalThis.fetch };
+
+/** Cap on the response body read: a large body must not exhaust the container. */
+export const MAX_BODY_BYTES = 64 * 1024;
+
+/**
+ * Read at most MAX_BODY_BYTES of the response body, stopping as soon as
+ * `bodyContains` is matched. Reading less than the full body also lets the
+ * socket be released early via reader.cancel().
+ */
+async function readBodyBounded(
+  response: Response,
+  bodyContains?: string,
+): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    return await response.text();
+  }
+  const decoder = new TextDecoder();
+  let text = "";
+  let bytesRead = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done || !value) {
+        break;
+      }
+      const remaining = MAX_BODY_BYTES - bytesRead;
+      if (value.byteLength >= remaining) {
+        text += decoder.decode(value.subarray(0, remaining), { stream: true });
+        break;
+      }
+      bytesRead += value.byteLength;
+      text += decoder.decode(value, { stream: true });
+      if (bodyContains !== undefined && text.includes(bodyContains)) {
+        break;
+      }
+    }
+    return text + decoder.decode();
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+}
 
 export async function probeHttp(
   probe: ResolvedProbeConfig,
@@ -95,7 +178,7 @@ export async function probeHttp(
       ...(probe.body !== undefined ? { body: probe.body } : {}),
       signal: controller.signal,
     });
-    const bodyText = await response.text();
+    const bodyText = await readBodyBounded(response, probe.expect?.bodyContains);
     const durationMs = Date.now() - started;
 
     if (

@@ -1,5 +1,11 @@
 import * as net from "node:net";
-import { probeDns, probeHttp, probeTcp, probeTls } from "./ProbeEngine";
+import {
+  MAX_BODY_BYTES,
+  probeDns,
+  probeHttp,
+  probeTcp,
+  probeTls,
+} from "./ProbeEngine";
 import { ResolvedProbeConfig } from "./ProbeTypes";
 
 function httpProbe(overrides: Partial<ResolvedProbeConfig> = {}): ResolvedProbeConfig {
@@ -117,9 +123,11 @@ describe("probeHttp", () => {
     ["ENOTFOUND", "dns_error"],
     ["EAI_AGAIN", "dns_error"],
     ["ECONNREFUSED", "connect_refused"],
+    ["ENETUNREACH", "network_unreachable"],
+    ["EHOSTUNREACH", "network_unreachable"],
+    ["ECONNRESET", "connection_reset"],
     ["CERT_HAS_EXPIRED", "tls_error"],
     ["ERR_TLS_CERT_ALTNAME_INVALID", "tls_error"],
-    ["ECONNRESET", "unknown"],
   ])("classifies cause code %s as %s", async (code, expected) => {
     const fetchError = new Error("fetch failed");
     (fetchError as unknown as { cause: unknown }).cause = { code };
@@ -128,6 +136,155 @@ describe("probeHttp", () => {
     expect(result.success).toBe(false);
     expect(result.errorCode).toBe(expected);
     expect(result.statusCode).toBeUndefined();
+  });
+
+  it("includes the undici cause address, port and syscall in the error detail", async () => {
+    const fetchError = new Error("fetch failed");
+    (fetchError as unknown as { cause: unknown }).cause = {
+      code: "ECONNREFUSED",
+      syscall: "connect",
+      address: "10.43.0.5",
+      port: 443,
+    };
+    const fetchMock = jest.fn().mockRejectedValue(fetchError);
+    const result = await probeHttp(httpProbe(), { fetch: fetchMock });
+    expect(result.errorCode).toBe("connect_refused");
+    expect(result.errorDetail).toBe(
+      "ECONNREFUSED connect 10.43.0.5:443: fetch failed",
+    );
+  });
+
+  it("classifies a mid-request socket error with its errno fields", async () => {
+    const fetchError = new Error("socket hang up");
+    (fetchError as unknown as { code: string }).code = "ECONNRESET";
+    const fetchMock = jest.fn().mockRejectedValue(fetchError);
+    const result = await probeHttp(httpProbe(), { fetch: fetchMock });
+    expect(result.errorCode).toBe("connection_reset");
+    expect(result.errorDetail).toBe("ECONNRESET: socket hang up");
+  });
+});
+
+describe("probeHttp response body read", () => {
+  /** Stream of `chunks` chunks of `chunkSize` bytes that counts the pulls. */
+  function countingStream(chunks: number, chunkSize: number): {
+    body: ReadableStream<Uint8Array>;
+    pulls: () => number;
+    cancelled: () => boolean;
+  } {
+    let pulls = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulls >= chunks) {
+          controller.close();
+          return;
+        }
+        pulls++;
+        controller.enqueue(new Uint8Array(chunkSize).fill(120));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    return { body, pulls: () => pulls, cancelled: () => cancelled };
+  }
+
+  it("reads at most MAX_BODY_BYTES and cancels the stream", async () => {
+    const stream = countingStream(1024, 1024);
+    const fetchMock = jest.fn().mockResolvedValue({
+      status: 200,
+      body: stream.body,
+    } as unknown as Response);
+
+    const result = await probeHttp(httpProbe(), { fetch: fetchMock });
+
+    expect(result.success).toBe(true);
+    // +1 tolerates the stream's own queue prefetch (the reader itself never
+    // reads past the cap; the stream holds 1024 chunks).
+    expect(stream.pulls()).toBeLessThanOrEqual(MAX_BODY_BYTES / 1024 + 1);
+    expect(stream.cancelled()).toBe(true);
+  });
+
+  it("stops as soon as bodyContains is matched", async () => {
+    let pulls = 0;
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls++;
+        if (pulls === 1) {
+          controller.enqueue(encoder.encode("<html>PROBE STARTUP OK</html>"));
+          return;
+        }
+        controller.enqueue(new Uint8Array(1024).fill(120));
+      },
+    });
+    const fetchMock = jest.fn().mockResolvedValue({
+      status: 200,
+      body,
+    } as unknown as Response);
+
+    const result = await probeHttp(
+      httpProbe({ expect: { bodyContains: "PROBE STARTUP OK" } }),
+      { fetch: fetchMock },
+    );
+
+    expect(result.success).toBe(true);
+    // 1 read + at most 1 queue prefetch, far below the 1024 chunks offered.
+    expect(pulls).toBeLessThanOrEqual(2);
+  });
+
+  it("searches bodyContains in the first MAX_BODY_BYTES only", async () => {
+    const body = "x".repeat(MAX_BODY_BYTES) + "TAIL-MARKER";
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValue(new Response(body, { status: 200 }));
+
+    const result = await probeHttp(
+      httpProbe({ expect: { bodyContains: "TAIL-MARKER" } }),
+      { fetch: fetchMock },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.errorCode).toBe("body_mismatch");
+  });
+
+  it("matches bodyContains within the read window of a large body", async () => {
+    const body = "HEAD-MARKER" + "x".repeat(MAX_BODY_BYTES * 4);
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValue(new Response(body, { status: 200 }));
+
+    const result = await probeHttp(
+      httpProbe({ expect: { bodyContains: "HEAD-MARKER" } }),
+      { fetch: fetchMock },
+    );
+
+    expect(result.success).toBe(true);
+  });
+
+  it("classifies an abort during the body read as timeout", async () => {
+    const fetchMock = jest.fn(
+      (_url: string, init?: RequestInit) =>
+        Promise.resolve({
+          status: 200,
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              init?.signal?.addEventListener("abort", () => {
+                const abortError = new Error("The operation was aborted");
+                abortError.name = "AbortError";
+                controller.error(abortError);
+              });
+            },
+          }),
+        } as unknown as Response),
+    );
+
+    const result = await probeHttp(httpProbe({ timeoutSeconds: 0.05 }), {
+      fetch: fetchMock,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.errorCode).toBe("timeout");
   });
 });
 
@@ -247,7 +404,9 @@ describe("probeTls", () => {
     const fakeSocket = new EventEmitter() as unknown as net.Socket;
     (fakeSocket as unknown as { destroy: unknown }).destroy = () => {};
     (fakeSocket as unknown as { getPeerCertificate: unknown }).getPeerCertificate =
-      () => ({ valid_to: new Date(Date.now() + 30 * 86400000) });
+      // +1 minute of slack: the engine floors the remainder, so a millisecond
+      // ticking over between this fake and the assertion would read 29.
+      () => ({ valid_to: new Date(Date.now() + 30 * 86400000 + 60000) });
     const pending = probeTls(
       { name: "tls", type: "tls", target: "example.com:443", intervalSeconds: 30, timeoutSeconds: 5, method: "GET", headers: {} },
       { connect: () => fakeSocket as never },

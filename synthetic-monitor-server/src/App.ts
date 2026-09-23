@@ -14,24 +14,11 @@ import {
   OTelTracer,
 } from "./OTelContext";
 import { ProbeConfig, withSelfProbe } from "./ProbeConfig";
-import { runProbe } from "./ProbeEngine";
-import { ProbeResult } from "./ProbeTypes";
+import { ProbeRunnerOptions, runProbeWithSpan } from "./ProbeRunner";
+import { ProbeResult, ResolvedProbeConfig } from "./ProbeTypes";
 import { Scheduler } from "./Scheduler";
 
 const logger = OTelLogger().createModuleLogger("app");
-
-function logProbeResult(result: ProbeResult): void {
-  const durationText = `${result.durationMs}ms`;
-  if (result.success) {
-    logger.info(
-      `Probe ${result.probeName} [${result.probeType}] succeeded in ${durationText}${result.statusCode !== undefined ? ` (status ${result.statusCode})` : ""}`,
-    );
-  } else {
-    logger.error(
-      `Probe ${result.probeName} [${result.probeType}] failed in ${durationText}: error.code=${result.errorCode ?? "unknown"}${result.errorDetail ? ` (${result.errorDetail})` : ""}`,
-    );
-  }
-}
 
 async function shutdownOtel(): Promise<void> {
   // otel-utils 1.3.0+ exposes forceFlush/shutdown; feature-detect so this also
@@ -90,11 +77,10 @@ Promise.resolve()
     });
     const alertService = new AlertService(config, notificationClient);
 
-    const handleResult = (result: ProbeResult): void => {
+    const handleResult = (result: ProbeResult, probe: ResolvedProbeConfig): void => {
       recordProbeResult(result);
-      logProbeResult(result);
       alertService
-        .onResult(result)
+        .onResult(result, probe)
         .catch((err) =>
           logger.error(
             "Unexpected error while evaluating alert state",
@@ -103,12 +89,13 @@ Promise.resolve()
         );
     };
 
+    const probeRunnerOptions: ProbeRunnerOptions = {
+      logSuccess: config.PROBE_LOG_SUCCESS,
+      location: config.PROBE_LOCATION,
+    };
     const scheduler = new Scheduler({
       maxConcurrency: config.PROBE_MAX_CONCURRENCY,
-      execute: (probe) => {
-        const span = OTelTracer().startSpan(`probe.${probe.name}`);
-        return runProbe(probe).finally(() => span.end());
-      },
+      execute: (probe) => runProbeWithSpan(probe, probeRunnerOptions),
       onResult: handleResult,
       log: (message) => logger.info(message),
     });

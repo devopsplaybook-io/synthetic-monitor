@@ -245,11 +245,55 @@ probes:
 `,
       /body is only supported/,
     ],
+    [
+      "zero failureThreshold",
+      `
+probes:
+  - name: zero-threshold
+    type: http
+    target: http://a/
+    failureThreshold: 0
+`,
+      /failureThreshold must be a positive integer/,
+    ],
+    [
+      "non-integer failureThreshold",
+      `
+probes:
+  - name: fractional-threshold
+    type: http
+    target: http://a/
+    failureThreshold: 1.5
+`,
+      /failureThreshold must be a positive integer/,
+    ],
   ])("rejects invalid config: %s", async (_label, yaml, expectedError) => {
     const filePath = writeConfigFile(yaml);
     try {
       const probeConfig = new ProbeConfig(filePath);
       await expect(probeConfig.load()).rejects.toThrow(expectedError);
+    } finally {
+      cleanup(filePath);
+    }
+  });
+
+  it("resolves a per-probe failureThreshold", async () => {
+    const filePath = writeConfigFile(`
+probes:
+  - name: external-api
+    type: http
+    target: http://a/
+    intervalSeconds: 600
+    failureThreshold: 2
+  - name: no-threshold
+    type: http
+    target: http://b/
+`);
+    try {
+      const probeConfig = new ProbeConfig(filePath);
+      await probeConfig.load();
+      expect(probeConfig.getProbes()[0].failureThreshold).toBe(2);
+      expect(probeConfig.getProbes()[1].failureThreshold).toBeUndefined();
     } finally {
       cleanup(filePath);
     }

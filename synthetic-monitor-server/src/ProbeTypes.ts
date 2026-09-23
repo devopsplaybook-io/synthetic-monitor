@@ -7,6 +7,8 @@ export type ProbeType = "http" | "tcp" | "dns" | "tls";
 export type ProbeErrorCode =
   | "dns_error"
   | "connect_refused"
+  | "network_unreachable"
+  | "connection_reset"
   | "tls_error"
   | "timeout"
   | "status_mismatch"
@@ -28,6 +30,8 @@ export interface ProbeConfigEntry {
   target: string;
   intervalSeconds?: number;
   timeoutSeconds?: number;
+  /** Consecutive failures before alerting; defaults to NOTIFICATION_CONSECUTIVE_FAILURES. */
+  failureThreshold?: number;
   /** HTTP only. Defaults to GET. */
   method?: string;
   /** HTTP only. Header values support ${ENV} interpolation. */
@@ -43,6 +47,7 @@ export interface ResolvedProbeConfig {
   target: string;
   intervalSeconds: number;
   timeoutSeconds: number;
+  failureThreshold?: number;
   method: string;
   headers: Record<string, string>;
   body?: string;
