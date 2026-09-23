@@ -18,8 +18,8 @@ export interface SchedulerOptions {
   maxConcurrency: number;
   /** Runs one probe; injectable for tests. */
   execute: (probe: ResolvedProbeConfig) => Promise<ProbeResult>;
-  /** Called for every completed probe run. */
-  onResult: (result: ProbeResult) => void;
+  /** Called for every completed probe run, with the probe it belongs to. */
+  onResult: (result: ProbeResult, probe: ResolvedProbeConfig) => void;
   log: (message: string) => void;
 }
 
@@ -103,7 +103,7 @@ export class Scheduler {
         })
         .then((result) => {
           if (result) {
-            this.options.onResult(result);
+            this.options.onResult(result, probe);
           }
         })
         .catch((err) => {

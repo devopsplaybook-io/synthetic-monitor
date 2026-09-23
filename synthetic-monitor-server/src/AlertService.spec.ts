@@ -1,5 +1,20 @@
 import { AlertService, NotificationSender } from "./AlertService";
-import { ProbeResult } from "./ProbeTypes";
+import { ProbeResult, ResolvedProbeConfig } from "./ProbeTypes";
+
+function probeConfig(
+  overrides: Partial<ResolvedProbeConfig> = {},
+): ResolvedProbeConfig {
+  return {
+    name: "web",
+    type: "http",
+    target: "https://example.com/health",
+    intervalSeconds: 600,
+    timeoutSeconds: 5,
+    method: "GET",
+    headers: {},
+    ...overrides,
+  };
+}
 
 interface SentNotification {
   severity: "error" | "info";
@@ -130,6 +145,42 @@ describe("AlertService", () => {
     await alertService.onResult(successResult());
     await alertService.sendDigest();
     expect(sent).toHaveLength(0);
+  });
+
+  it("uses the per-probe failure threshold when the probe defines one", async () => {
+    const { sender, sent } = fakeSender();
+    const alertService = new AlertService(alertConfig, sender);
+    const probe = probeConfig({ failureThreshold: 1 });
+
+    await alertService.onResult(failingResult("external"), probe);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].severity).toBe("error");
+    expect(sent[0].body).toMatch(/1 consecutive time\(s\)/);
+
+    // A probe without an override keeps the global threshold.
+    const { sender: sender2, sent: sent2 } = fakeSender();
+    const alertService2 = new AlertService(alertConfig, sender2);
+    await alertService2.onResult(failingResult("internal"), probeConfig());
+    expect(sent2).toHaveLength(0);
+  });
+
+  it("includes type, target and location in the failure body", async () => {
+    const { sender, sent } = fakeSender();
+    const alertService = new AlertService(
+      { ...alertConfig, PROBE_LOCATION: "home" },
+      sender,
+    );
+
+    for (let i = 0; i < 3; i++) {
+      await alertService.onResult(
+        failingResult("web"),
+        probeConfig({ failureThreshold: 3 }),
+      );
+    }
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].body).toContain("https://example.com/health");
+    expect(sent[0].body).toContain("location: home");
   });
 
   it("tracks probes independently", async () => {

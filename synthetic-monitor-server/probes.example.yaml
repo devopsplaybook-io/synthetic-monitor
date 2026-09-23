@@ -38,6 +38,17 @@ probes:
     intervalSeconds: 300
     timeoutSeconds: 5
 
+  # Slow external probe with its own alert threshold: 2 consecutive failures
+  # (20 minutes here) instead of the global NOTIFICATION_CONSECUTIVE_FAILURES.
+  - name: slow-external
+    type: http
+    target: https://api.example.com/health
+    intervalSeconds: 600
+    timeoutSeconds: 10
+    failureThreshold: 2
+    expect:
+      statusCode: 200
+
   # TLS certificate expiry check (probe.tls.cert_remaining_days).
   - name: tls-example
     type: tls

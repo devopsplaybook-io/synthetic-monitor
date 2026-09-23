@@ -71,6 +71,23 @@ describe("Scheduler", () => {
     await scheduler.stop();
   });
 
+  it("calls onResult with the probe each result belongs to", async () => {
+    const seen: Array<[string, string]> = [];
+    const scheduler = new Scheduler({
+      maxConcurrency: 5,
+      execute: async (p) => result(p.name),
+      onResult: (r, p) => seen.push([r.probeName, p.target]),
+      log: () => {},
+    });
+    scheduler.start([probe("a", 0.05)]);
+    await sleep(120);
+    await scheduler.stop();
+    expect(seen.length).toBeGreaterThanOrEqual(1);
+    expect(seen.every(([name, target]) => target === `http://localhost/${name}`)).toBe(
+      true,
+    );
+  });
+
   it("calls onResult for each completed run", async () => {
     const results: string[] = [];
     const scheduler = new Scheduler({

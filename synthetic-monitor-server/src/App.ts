@@ -15,7 +15,7 @@ import {
 } from "./OTelContext";
 import { ProbeConfig, withSelfProbe } from "./ProbeConfig";
 import { ProbeRunnerOptions, runProbeWithSpan } from "./ProbeRunner";
-import { ProbeResult } from "./ProbeTypes";
+import { ProbeResult, ResolvedProbeConfig } from "./ProbeTypes";
 import { Scheduler } from "./Scheduler";
 
 const logger = OTelLogger().createModuleLogger("app");
@@ -77,10 +77,10 @@ Promise.resolve()
     });
     const alertService = new AlertService(config, notificationClient);
 
-    const handleResult = (result: ProbeResult): void => {
+    const handleResult = (result: ProbeResult, probe: ResolvedProbeConfig): void => {
       recordProbeResult(result);
       alertService
-        .onResult(result)
+        .onResult(result, probe)
         .catch((err) =>
           logger.error(
             "Unexpected error while evaluating alert state",

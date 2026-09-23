@@ -29,6 +29,8 @@ probes:
     target: http://localhost:8080/   # required (format depends on type)
     intervalSeconds: 30          # optional, default 30; must be > timeoutSeconds
     timeoutSeconds: 5            # optional, default 5
+    failureThreshold: 3          # optional; consecutive failures before alerting
+                                 # (defaults to NOTIFICATION_CONSECUTIVE_FAILURES)
     method: GET                  # http only, optional, default GET
     headers:                     # http only, optional; values support ${ENV}
       Authorization: "Bearer ${PROBE_API_SECRET_TOKEN}"
@@ -122,7 +124,7 @@ Priority: environment variables > `config.json` > defaults (ConfigBase conventio
 
 ### Alerting
 
-Per-probe state machine: an `error` notification after `NOTIFICATION_CONSECUTIVE_FAILURES` consecutive failures, an `info` notification on recovery, flap suppression (fewer than N failures followed by a recovery stays silent) and a repeat-suppression window while the probe keeps failing. With `NOTIFICATION_DIGEST_SCHEDULE` set (validated cron, evaluated in UTC), a periodic Markdown digest summarizes the state of every probe. All of it is fail-safe: when `NOTIFICATIONS_API`/`NOTIFICATIONS_TOKEN` are unset nothing is sent.
+Per-probe state machine: an `error` notification after `NOTIFICATION_CONSECUTIVE_FAILURES` consecutive failures (a probe can override its own threshold with `failureThreshold` — detection time is `failureThreshold × intervalSeconds`: 3 minutes for a 60 s probe, 30 minutes for a 600 s probe at the default of 3), an `info` notification on recovery, flap suppression (fewer than N failures followed by a recovery stays silent) and a repeat-suppression window while the probe keeps failing. The failure body carries the probe type, target and location so the notification is actionable without opening `probes.yaml`. With `NOTIFICATION_DIGEST_SCHEDULE` set (validated cron, evaluated in UTC), a periodic Markdown digest summarizes the state of every probe. All of it is fail-safe: when `NOTIFICATIONS_API`/`NOTIFICATIONS_TOKEN` are unset nothing is sent.
 
 ## Self-monitoring
 

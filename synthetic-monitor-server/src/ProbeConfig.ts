@@ -109,6 +109,14 @@ function validateProbeEntry(entry: ProbeConfigEntry): ResolvedProbeConfig {
   ) {
     throw new Error(`Probe ${name}: timeoutSeconds must be a positive number`);
   }
+  if (
+    entry.failureThreshold !== undefined &&
+    (!Number.isInteger(entry.failureThreshold) || entry.failureThreshold < 1)
+  ) {
+    throw new Error(
+      `Probe ${name}: failureThreshold must be a positive integer`,
+    );
+  }
 
   const intervalSeconds = entry.intervalSeconds ?? DEFAULT_INTERVAL_SECONDS;
   const timeoutSeconds = entry.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS;
@@ -200,6 +208,9 @@ function validateProbeEntry(entry: ProbeConfigEntry): ResolvedProbeConfig {
     target: entry.target,
     intervalSeconds,
     timeoutSeconds,
+    ...(entry.failureThreshold !== undefined
+      ? { failureThreshold: entry.failureThreshold }
+      : {}),
     method,
     headers: entry.headers ?? {},
     ...(entry.body !== undefined ? { body: entry.body } : {}),
