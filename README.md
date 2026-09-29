@@ -66,17 +66,10 @@ Observable gauges, registered once at startup; callbacks read the last-result st
 | `probe.http.status_code` | same | Last HTTP response status code; **`0` means no response was received** (http probes only) |
 | `probe.dns.lookup_time` | same | Last DNS resolution time in seconds (`dns` probes) |
 | `probe.tls.cert_remaining_days` | same | Days remaining before the certificate expires (`tls` probes) |
-| `probe.last_result_age_seconds` | same | Seconds since the last completed run of the probe (heartbeat) |
 
 The `status_code` sentinel matters: not observing the metric while an endpoint is unreachable would keep displaying the last known status (a flat `200`) during an outage.
 
-Failure reasons live on the counter, not on the gauges:
-
-| Metric | Labels | Meaning |
-| --- | --- | --- |
-| `synthetic-monitor.probe.runs.total` | `probe.name`, `probe.type`, `probe.location`, `result` (`success`/`failure`), `error.code` (failures) | Cumulative number of probe runs by outcome (`StandardMeter.createCounter` prefixes counter names with the service id) |
-
-Counters are cumulative per series: after a recovery the `result=failure` series stays visible at its last total — their documented semantics, unaffected for `increase()`/`rate()` queries. The heartbeat (`probe.last_result_age_seconds`) grows while no new result arrives, so a silently stopped probe (stuck scheduler, hung run holding a pool slot) is directly alertable (e.g. `probe.last_result_age_seconds > 3 × <probe interval>`) — a `probe.success == 1` deadman check would stay green on frozen state.
+Failure reasons are available as `error.code` attributes on traces and logs, not on the gauges.
 
 ### Traces
 
@@ -86,7 +79,7 @@ One span per probe run, named `probe.<name>` (`otel-utils` sanitizes it to `prob
 
 One log record per probe run — INFO on success, ERROR on failure — emitted inside the probe span, so `trace.id`/`span.id` link it to the trace (otel-light extracts them into its log rows). Structured attributes: `log.type=probe-result`, `probe.name`, `probe.type`, `probe.location`, `duration_ms`, `status_code` (when available), `error.code` and `error.detail` on failures. The message text is stable per outcome (`Probe <name> [<type>] succeeded` / `Probe <name> [<type>] failed: error.code=<code>`) — the variable duration would otherwise fragment otel-light's "top error messages" view. `PROBE_LOG_SUCCESS=false` turns off the success records (failure records are always emitted).
 
-Failure taxonomy reported as `error.code` (metric counter, span attribute, log attribute):
+Failure taxonomy reported as `error.code` (span attribute, log attribute):
 
 | Code | Meaning |
 | --- | --- |
