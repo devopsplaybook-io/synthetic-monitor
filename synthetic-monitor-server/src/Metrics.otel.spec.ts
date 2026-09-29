@@ -4,7 +4,7 @@
  * path, not a fake meter): an attribute set that varies with the value would
  * produce frozen/phantom series, so the test asserts exactly one
  * `probe.success` data point per probe per collection cycle with no
- * `error.code` attribute, the sentinel status code and the heartbeat gauge.
+ * `error.code` attribute, the sentinel status code and no removed metrics.
  */
 import {
   AggregationTemporality,
@@ -32,8 +32,7 @@ interface TestMeter {
 }
 
 /**
- * Mirrors `@devopsplaybook.io/otel-utils` StandardMeter: observable gauges
- * keep their key, counters are exported as `${SERVICE_ID}.${key}`.
+ * Mirrors the observable-gauge behavior of `@devopsplaybook.io/otel-utils`.
  */
 function testMeter(): TestMeter {
   const exporter = new InMemoryMetricExporter(
@@ -58,7 +57,6 @@ function testMeter(): TestMeter {
       gauge.addCallback(callback);
       return gauge;
     },
-    createCounter: (key: string) => meter.createCounter(`${SERVICE_ID}.${key}`),
   };
   return {
     setAsCurrent: () => OTelSetMeter(meterAdapter as never),
@@ -114,18 +112,25 @@ function result(overrides: Partial<ProbeResult>): ProbeResult {
 
 describe("Metrics (real sdk-metrics provider)", () => {
   let meter: TestMeter;
-  let now: number;
 
   beforeEach(() => {
     pruneProbeResults(new Set());
-    now = Date.now();
     meter = testMeter();
     meter.setAsCurrent();
-    MetricsInit({ PROBE_LOCATION: "home" }, () => now);
+    MetricsInit({ PROBE_LOCATION: "home" });
   });
 
   afterEach(async () => {
     await meter.shutdown();
+  });
+
+  it("does not export either removed metric", async () => {
+    recordProbeResult(result({ success: false, errorCode: "timeout" }));
+
+    const exported = await meter.collect();
+
+    expect(pointsOf(exported, "synthetic-monitor.probe.runs.total")).toEqual([]);
+    expect(pointsOf(exported, "probe.last_result_age_seconds")).toEqual([]);
   });
 
   it("exports exactly one probe.success series per probe through a failure and a recovery", async () => {
@@ -156,7 +161,7 @@ describe("Metrics (real sdk-metrics provider)", () => {
       "probe.type": "http",
       "probe.location": "home",
     });
-    // The failure reason must not appear on the gauge: it belongs to the counter.
+    // The failure reason must not appear on the gauge.
     expect(failureSuccess[0].attributes["error.code"]).toBeUndefined();
 
     recordProbeResult(result({ success: true }));
@@ -165,38 +170,6 @@ describe("Metrics (real sdk-metrics provider)", () => {
     expect(recoverySuccess).toHaveLength(1);
     expect(recoverySuccess[0].value).toBe(1);
     expect(recoverySuccess[0].attributes["error.code"]).toBeUndefined();
-  });
-
-  it("carries the failure reason on the cumulative counter", async () => {
-    recordProbeResult(result({ success: true }));
-    recordProbeResult(
-      result({ success: false, errorCode: "connect_refused" }),
-    );
-    recordProbeResult(result({ success: true }));
-    recordProbeResult(
-      result({ success: false, statusCode: undefined, errorCode: "timeout" }),
-    );
-
-    const counter = pointsOf(
-      await meter.collect(),
-      `${SERVICE_ID}.probe.runs.total`,
-    );
-    expect(counter).toHaveLength(3);
-    const byLabel = (attributes: Partial<ExportedPoint["attributes"]>) =>
-      counter.find((point) =>
-        Object.entries(attributes).every(
-          ([key, value]) => point.attributes[key] === value,
-        ),
-      );
-    expect(
-      byLabel({ result: "success" })?.value,
-    ).toBe(2);
-    expect(
-      byLabel({ result: "failure", "error.code": "connect_refused" })?.value,
-    ).toBe(1);
-    expect(byLabel({ result: "failure", "error.code": "timeout" })?.value).toBe(
-      1,
-    );
   });
 
   it("exports the status-code sentinel 0 while an endpoint is unreachable", async () => {
@@ -235,31 +208,5 @@ describe("Metrics (real sdk-metrics provider)", () => {
     expect(
       pointsOf(await meter.collect(), "probe.http.status_code"),
     ).toHaveLength(0);
-  });
-
-  it("heartbeat gauge grows while no new result arrives", async () => {
-    recordProbeResult(result({ time: now - 1000 }));
-    const first = pointsOf(
-      await meter.collect(),
-      "probe.last_result_age_seconds",
-    );
-    expect(first).toHaveLength(1);
-    expect(first[0].value).toBe(1);
-
-    now += 5000;
-    const second = pointsOf(
-      await meter.collect(),
-      "probe.last_result_age_seconds",
-    );
-    expect(second).toHaveLength(1);
-    expect(second[0].value).toBe(6);
-
-    recordProbeResult(result({ time: now }));
-    const afterRun = pointsOf(
-      await meter.collect(),
-      "probe.last_result_age_seconds",
-    );
-    expect(afterRun).toHaveLength(1);
-    expect(afterRun[0].value).toBe(0);
   });
 });

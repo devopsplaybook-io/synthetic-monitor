@@ -1,4 +1,3 @@
-import { Counter } from "@opentelemetry/api";
 import { OTelMeter } from "./OTelContext";
 import { ProbeResult } from "./ProbeTypes";
 
@@ -7,18 +6,9 @@ import { ProbeResult } from "./ProbeTypes";
 const lastResults = new Map<string, ProbeResult>();
 
 let probeLocation = "";
-let runsCounter: Counter | undefined;
 
 export function recordProbeResult(result: ProbeResult): void {
   lastResults.set(result.probeName, result);
-  const attributes: Record<string, string> = {
-    ...probeAttributes(result),
-    result: result.success ? "success" : "failure",
-  };
-  if (!result.success) {
-    attributes["error.code"] = result.errorCode ?? "unknown";
-  }
-  runsCounter?.add(1, attributes);
 }
 
 /**
@@ -41,7 +31,7 @@ export function getLastProbeResults(): ProbeResult[] {
  * Gauge labels are a fixed set per probe: an attribute that varies with the
  * value (`error.code` on failures only) would make the OTel SDK re-export the
  * previous value under a new card as a frozen series, contradicting the live
- * one. Failure reasons therefore live on the counter, not on the gauges.
+ * one. Failure reasons are not reported as gauge attributes.
  */
 function probeAttributes(result: ProbeResult): Record<string, string> {
   const attributes: Record<string, string> = {
@@ -55,19 +45,13 @@ function probeAttributes(result: ProbeResult): Record<string, string> {
 }
 
 /**
- * Register the observable gauges and the outcome counter once at startup. The
- * gauge callbacks iterate the live last-result map, so hot-reloaded probes
- * appear and disappear without re-registering anything. Low-cardinality
- * discipline: labels carry only the probe name, type, location and (`result`,
- * `error.code` on the counter) — never URLs, hosts or ids.
+ * Register the observable gauges once at startup. The gauge callbacks iterate
+ * the live last-result map, so hot-reloaded probes appear and disappear
+ * without re-registering anything. Labels carry only the probe name, type and
+ * location — never URLs, hosts or ids.
  */
-export function MetricsInit(
-  config: { PROBE_LOCATION: string },
-  now: () => number = Date.now,
-): void {
+export function MetricsInit(config: { PROBE_LOCATION: string }): void {
   probeLocation = config.PROBE_LOCATION;
-
-  runsCounter = OTelMeter().createCounter("probe.runs.total");
 
   OTelMeter().createObservableGauge(
     "probe.success",
@@ -137,18 +121,5 @@ export function MetricsInit(
       }
     },
     "Days remaining before the TLS certificate of the probed endpoint expires",
-  );
-
-  OTelMeter().createObservableGauge(
-    "probe.last_result_age_seconds",
-    (observableResult) => {
-      for (const result of lastResults.values()) {
-        observableResult.observe(
-          Math.max(0, Math.floor((now() - result.time) / 1000)),
-          probeAttributes(result),
-        );
-      }
-    },
-    "Seconds since the last completed run of the probe (heartbeat: grows when the probe stops reporting)",
   );
 }
